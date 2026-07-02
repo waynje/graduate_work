@@ -1,0 +1,20 @@
+filebeat.inputs:
+  - type: container
+    enabled: true
+    stream: all
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    processors:
+      - add_docker_metadata:
+          host: "unix:///var/run/docker.sock"
+
+setup.ilm.enabled: false
+setup.template.name: "movies-platform-logs"
+setup.template.pattern: "movies-platform-logs-*"
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "movies-platform-logs-%{+yyyy.MM.dd}"
+
+logging.level: info
+logging.to_stderr: true

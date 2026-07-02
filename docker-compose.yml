@@ -1,0 +1,444 @@
+
+services:
+  movies-db:
+    image: postgres:13
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-movies}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database_dump.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$POSTGRES_USER\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "6831:6831/udp"
+
+  kafka-0:
+    image: apache/kafka:3.7.0
+    restart: unless-stopped
+    ports:
+      - "9094:9094"
+    environment:
+      - KAFKA_NODE_ID=0
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093
+      - CLUSTER_ID=abcdefghijklmnopqrstuv
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-0:9092,EXTERNAL://127.0.0.1:9094
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+    volumes:
+      - kafka_0_data:/var/lib/kafka/data
+
+  kafka-1:
+    image: apache/kafka:3.7.0
+    restart: unless-stopped
+    ports:
+      - "9095:9095"
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093
+      - CLUSTER_ID=abcdefghijklmnopqrstuv
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9095
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-1:9092,EXTERNAL://127.0.0.1:9095
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+    volumes:
+      - kafka_1_data:/var/lib/kafka/data
+
+  kafka-2:
+    image: apache/kafka:3.7.0
+    restart: unless-stopped
+    ports:
+      - "9096:9096"
+    environment:
+      - KAFKA_NODE_ID=2
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093
+      - CLUSTER_ID=abcdefghijklmnopqrstuv
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9096
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka-2:9092,EXTERNAL://127.0.0.1:9096
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+    volumes:
+      - kafka_2_data:/var/lib/kafka/data
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.0
+    restart: unless-stopped
+    depends_on:
+      - kafka-0
+      - kafka-1
+      - kafka-2
+    ports:
+      - "8081:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS=kafka-0:9092
+      - KAFKA_CLUSTERS_0_NAME=kraft
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DB: ugc
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.11.0
+    user: root
+    restart: unless-stopped
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    command: ["filebeat", "-e", "--strict.perms=false", "-c", "/usr/share/filebeat/filebeat.yml"]
+    volumes:
+      - ./observability/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - filebeat_data:/usr/share/filebeat/data
+
+  etl:
+    build:
+      context: .
+      dockerfile: ./etl/Dockerfile
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_HOST: movies-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-movies}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      ELASTIC_HOST: elasticsearch
+      ELASTIC_PORT: 9200
+      ELASTIC_SCHEMA: http
+      ETL_INDEX_NAME: movies
+      ETL_SCHEMA_PATH: /app/es_schema.json
+      ETL_STATE_FILE_PATH: /app/state.json
+      ETL_BATCH_SIZE: 200
+    volumes:
+      - ./es_schema.json:/app/es_schema.json:ro
+  fastapi:
+    build:
+      context: .
+      dockerfile: ./src/Dockerfile
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+    env_file:
+      - ./.env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ELASTIC_HOST: elasticsearch
+      ELASTIC_PORT: 9200
+      ELASTIC_SCHEMA: http
+      PROJECT_NAME: movies
+      TRACING_ENABLED: "true"
+      JAEGER_HOST: jaeger
+      JAEGER_PORT: 6831
+    ports:
+      - "8000:8000"
+
+  ugc-api:
+    build:
+      context: .
+      dockerfile: ./ugc_service/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      kafka-0:
+        condition: service_started
+      kafka-1:
+        condition: service_started
+      kafka-2:
+        condition: service_started
+    env_file:
+      - ./.env
+    environment:
+      UGC_API_PORT: 8001
+      UGC_DATABASE_URL: postgresql+psycopg://postgres:postgres@movies-db:5432/movies
+      KAFKA_BOOTSTRAP_SERVERS: kafka-0:9092,kafka-1:9092,kafka-2:9092
+      UGC_KAFKA_TOPIC: ugc.events.raw
+      UGC_KAFKA_GROUP_ID: ugc-events-consumer
+      UGC_KAFKA_SEND_MAX_RETRIES: 5
+      UGC_KAFKA_SEND_RETRY_BACKOFF_SEC: 1
+      UGC_KAFKA_SEND_TIMEOUT_SEC: 2
+      UGC_RUN_MIGRATIONS_ON_STARTUP: "true"
+      UGC_REQUIRE_TRUSTED_USER_ID: "false"
+      SENTRY_SERVICE_NAME: ugc-api
+    ports:
+      - "8001:8001"
+
+  ugc-consumer:
+    build:
+      context: .
+      dockerfile: ./ugc_service/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "ugc_service.consumer"]
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      kafka-0:
+        condition: service_started
+      kafka-1:
+        condition: service_started
+      kafka-2:
+        condition: service_started
+    env_file:
+      - ./.env
+    environment:
+      UGC_DATABASE_URL: postgresql+psycopg://postgres:postgres@movies-db:5432/movies
+      KAFKA_BOOTSTRAP_SERVERS: kafka-0:9092,kafka-1:9092,kafka-2:9092
+      UGC_KAFKA_TOPIC: ugc.events.raw
+      UGC_KAFKA_GROUP_ID: ugc-events-consumer
+      UGC_KAFKA_CONSUMER_RECONNECT_BACKOFF_SEC: 3
+      UGC_RUN_MIGRATIONS_ON_STARTUP: "true"
+
+  ugc-etl-clickhouse:
+    build:
+      context: .
+      dockerfile: ./ugc_etl/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      kafka-0:
+        condition: service_started
+      kafka-1:
+        condition: service_started
+      kafka-2:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
+    env_file:
+      - ./.env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-0:9092,kafka-1:9092,kafka-2:9092
+      UGC_KAFKA_TOPIC: ugc.events.raw
+      UGC_CLICKHOUSE_ETL_GROUP_ID: ugc-clickhouse-etl
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DATABASE: ugc
+      CLICKHOUSE_TABLE: page_views
+      UGC_ETL_POLL_TIMEOUT_MS: 5000
+      UGC_ETL_BATCH_SIZE: 500
+      UGC_ETL_INSERT_MAX_RETRIES: 5
+      UGC_ETL_RETRY_BACKOFF_SEC: 1
+      UGC_ETL_RECONNECT_BACKOFF_SEC: 3
+      UGC_ETL_METRICS_PORT: 9108
+      UGC_ETL_MEMORY_METRICS_INTERVAL_SEC: 5
+    ports:
+      - "9108:9108"
+
+  notification-api:
+    build:
+      context: .
+      dockerfile: ./notification_service/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      shortlink-api:
+        condition: service_started
+      kafka-0:
+        condition: service_started
+      kafka-1:
+        condition: service_started
+      kafka-2:
+        condition: service_started
+    env_file:
+      - ./.env
+    environment:
+      NOTIFY_API_PORT: 8010
+      NOTIFY_DATABASE_URL: postgresql+psycopg://postgres:postgres@movies-db:5432/movies
+      NOTIFY_KAFKA_BOOTSTRAP_SERVERS: kafka-0:9092,kafka-1:9092,kafka-2:9092
+      NOTIFY_KAFKA_TOPIC: notifications.dispatch
+      NOTIFY_KAFKA_GROUP_ID: notifications-worker
+      NOTIFY_RUN_MIGRATIONS_ON_STARTUP: "true"
+      NOTIFY_SENDER_MODE: log
+      NOTIFY_WEBSOCKET_POLL_INTERVAL_SEC: 2
+      NOTIFY_ADMIN_API_TOKEN: manager-secret
+      NOTIFY_WEBSOCKET_API_TOKEN: ws-secret
+      NOTIFY_SHORTLINK_BASE_URL: http://shortlink-api:8020
+      NOTIFY_AUTH_USERINFO_URL_TEMPLATE: http://fastapi:8000/api/v1/auth/users/{user_id}
+    ports:
+      - "8010:8010"
+
+  notification-worker:
+    build:
+      context: .
+      dockerfile: ./notification_service/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "notification_service.worker"]
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      shortlink-api:
+        condition: service_started
+      kafka-0:
+        condition: service_started
+      kafka-1:
+        condition: service_started
+      kafka-2:
+        condition: service_started
+    env_file:
+      - ./.env
+    environment:
+      NOTIFY_DATABASE_URL: postgresql+psycopg://postgres:postgres@movies-db:5432/movies
+      NOTIFY_KAFKA_BOOTSTRAP_SERVERS: kafka-0:9092,kafka-1:9092,kafka-2:9092
+      NOTIFY_KAFKA_TOPIC: notifications.dispatch
+      NOTIFY_KAFKA_GROUP_ID: notifications-worker
+      NOTIFY_RUN_MIGRATIONS_ON_STARTUP: "true"
+      NOTIFY_SENDER_MODE: log
+      NOTIFY_SHORTLINK_BASE_URL: http://shortlink-api:8020
+      NOTIFY_AUTH_USERINFO_URL_TEMPLATE: http://fastapi:8000/api/v1/auth/users/{user_id}
+
+  notification-scheduler:
+    build:
+      context: .
+      dockerfile: ./notification_service/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "notification_service.scheduler"]
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      kafka-0:
+        condition: service_started
+      kafka-1:
+        condition: service_started
+      kafka-2:
+        condition: service_started
+    env_file:
+      - ./.env
+    environment:
+      NOTIFY_DATABASE_URL: postgresql+psycopg://postgres:postgres@movies-db:5432/movies
+      NOTIFY_KAFKA_BOOTSTRAP_SERVERS: kafka-0:9092,kafka-1:9092,kafka-2:9092
+      NOTIFY_KAFKA_TOPIC: notifications.dispatch
+      NOTIFY_RUN_MIGRATIONS_ON_STARTUP: "true"
+
+  shortlink-api:
+    build:
+      context: .
+      dockerfile: ./shortlink_service/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8020:8020"
+
+  django-admin:
+    build:
+      context: .
+      dockerfile: ./django_admin/Dockerfile
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      fastapi:
+        condition: service_started
+      ugc-api:
+        condition: service_started
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_HOST: movies-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-movies}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      AUTH_API_BASE_URL: http://fastapi:8000
+      AUTH_API_LOGIN_URL: http://fastapi:8000/api/v1/auth/login
+      AUTH_API_ME_URL: http://fastapi:8000/api/v1/auth/me
+      DJANGO_SECRET_KEY: django-admin-secret
+      DJANGO_DEBUG: "true"
+      DJANGO_ALLOWED_HOSTS: "*"
+    ports:
+      - "8080:8080"
+volumes:
+  postgres_data:
+  elasticsearch_data:
+  kafka_0_data:
+  kafka_1_data:
+  kafka_2_data:
+  clickhouse_data:
+  filebeat_data:

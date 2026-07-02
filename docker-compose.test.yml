@@ -1,0 +1,90 @@
+services:
+  movies-db:
+    image: postgres:13
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-movies}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$POSTGRES_USER\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    environment: {}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data_test:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: ./src/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      POSTGRES_HOST: movies-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-movies}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      ELASTIC_HOST: elasticsearch
+      ELASTIC_PORT: 9200
+      ELASTIC_SCHEMA: http
+      PROJECT_NAME: movies
+      TRACING_ENABLED: "false"
+      AUTH_GOOGLE_CLIENT_ID: test-google-client-id
+      AUTH_GOOGLE_CLIENT_SECRET: test-google-client-secret
+      AUTH_GOOGLE_REDIRECT_URI: http://fastapi:8000/api/v1/auth/social/google/callback
+      AUTH_GOOGLE_POST_LOGIN_REDIRECT_URL: http://fastapi:8000/api/openapi
+    depends_on:
+      movies-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+
+  tests:
+    build:
+      context: .
+      dockerfile: ./tests/functional/Dockerfile
+    env_file:
+      - ./.env
+    environment:
+      SERVICE_URL: http://fastapi:8000
+      ES_HOST: http://elasticsearch:9200
+    depends_on:
+      fastapi:
+        condition: service_started
+
+volumes:
+  elasticsearch_data_test:
+
