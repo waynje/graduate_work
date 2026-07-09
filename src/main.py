@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from redis.asyncio import Redis
 
-from api.v1 import auth, films, roles
+from api.v1 import auth, films, recommendations, roles
 from core.config import Settings
 from core.rate_limit import RedisRateLimiterMiddleware
 from core.request_context import RequestIdMiddleware
@@ -56,5 +56,6 @@ app.add_middleware(
 )
 
 app.include_router(films.router, prefix='/api/v1/films', tags=['films'])
+app.include_router(recommendations.router, prefix='/api/v1/recommendations', tags=['recommendations'])
 app.include_router(auth.router, prefix='/api/v1/auth', tags=['auth'])
 app.include_router(roles.router, prefix='/api/v1/roles', tags=['roles'])

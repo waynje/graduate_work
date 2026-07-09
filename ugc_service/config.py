@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     testing: bool = False
     debug: bool = Field(False, alias="UGC_DEBUG")
     ugc_api_port: int = Field(8001, alias="UGC_API_PORT")
-    kafka_bootstrap_servers: list[str] = Field(
-        default_factory=lambda: ["kafka-0:9092", "kafka-1:9092", "kafka-2:9092"],
+    kafka_bootstrap_servers_raw: str = Field(
+        "kafka-0:9092,kafka-1:9092,kafka-2:9092",
         alias="KAFKA_BOOTSTRAP_SERVERS",
     )
     ugc_kafka_topic: str = Field("ugc.events.raw", alias="UGC_KAFKA_TOPIC")
@@ -57,15 +57,9 @@ class Settings(BaseSettings):
     sentry_traces_sample_rate: float = Field(0.0, alias="SENTRY_TRACES_SAMPLE_RATE")
     sentry_service_name: str = Field("ugc-service", alias="SENTRY_SERVICE_NAME")
 
-    @field_validator("kafka_bootstrap_servers", mode="before")
-    @classmethod
-    def _validate_bootstrap_servers(cls, value: str | list[str]) -> list[str]:
-        if isinstance(value, list):
-            parsed = [server.strip() for server in value if server.strip()]
-            if not parsed:
-                raise ValueError("KAFKA_BOOTSTRAP_SERVERS must contain at least one server.")
-            return parsed
-        return parse_bootstrap_servers(value)
+    @property
+    def kafka_bootstrap_servers(self) -> list[str]:
+        return parse_bootstrap_servers(self.kafka_bootstrap_servers_raw)
 
 
 @lru_cache(maxsize=1)

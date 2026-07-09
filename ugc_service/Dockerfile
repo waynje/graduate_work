@@ -10,6 +10,8 @@ COPY ugc_service/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY ugc_service /app/ugc_service
+COPY alembic /app/alembic
+COPY alembic.ini /app/alembic.ini
 
 EXPOSE 8001
 

@@ -14,20 +14,25 @@ if config.config_file_name is not None:
 
 
 def _database_url() -> str:
+    configured_url = config.get_main_option("sqlalchemy.url")
+    default_local = "postgresql+psycopg://postgres:postgres@localhost:5432/movies"
+    if configured_url and configured_url != default_local:
+        return configured_url
+
+    notify_database_url = os.getenv("NOTIFY_DATABASE_URL")
+    if notify_database_url:
+        return notify_database_url
+
     ugc_database_url = os.getenv("UGC_DATABASE_URL")
     if ugc_database_url:
         return ugc_database_url
+
     user = os.getenv("POSTGRES_USER", "postgres")
     password = os.getenv("POSTGRES_PASSWORD", "postgres")
     host = os.getenv("POSTGRES_HOST", "localhost")
     port = os.getenv("POSTGRES_PORT", "5432")
     dbname = os.getenv("POSTGRES_DB", "movies")
-    env_url = f"postgresql+psycopg://{user}:{password}@{host}:{port}/{dbname}"
-
-    configured_url = config.get_main_option("sqlalchemy.url")
-    if configured_url and configured_url != "postgresql+psycopg://postgres:postgres@localhost:5432/movies":
-        return configured_url
-    return env_url
+    return f"postgresql+psycopg://{user}:{password}@{host}:{port}/{dbname}"
 
 
 target_metadata = None
@@ -51,12 +56,10 @@ def run_migrations_online() -> None:
     configuration["sqlalchemy.url"] = _database_url()
     connectable = engine_from_config(configuration, prefix="sqlalchemy.", poolclass=pool.NullPool)
 
-    with connectable.connect() as connection:
-        # Serialize concurrent container startups: only one process applies migrations at a time.
+    with connectable.begin() as connection:
         connection.exec_driver_sql("SELECT pg_advisory_lock(48712026491583591)")
         try:
             context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
-
             with context.begin_transaction():
                 context.run_migrations()
         finally:

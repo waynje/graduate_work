@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import os
 from functools import lru_cache
 from logging import config as logging_config
+from typing import Optional
 
 from core.logger import LOGGING
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,6 +33,7 @@ class Settings(BaseSettings):
     etl_batch_size: int = 200
 
     film_cache_expire_in_seconds: int = 300
+    recommendations_cache_ttl_seconds: int = 300
     auth_access_token_ttl_seconds: int = 900
     auth_refresh_token_ttl_seconds: int = 864000
     auth_jwt_secret: str
@@ -51,9 +55,9 @@ class Settings(BaseSettings):
     jaeger_host: str = "jaeger"
     jaeger_port: int = 6831
 
-    auth_google_client_id: str | None = None
-    auth_google_client_secret: str | None = None
-    auth_google_redirect_uri: str | None = None
+    auth_google_client_id: Optional[str] = None
+    auth_google_client_secret: Optional[str] = None
+    auth_google_redirect_uri: Optional[str] = None
     auth_google_authorize_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     auth_google_token_url: str = "https://oauth2.googleapis.com/token"
     auth_google_userinfo_url: str = "https://openidconnect.googleapis.com/v1/userinfo"

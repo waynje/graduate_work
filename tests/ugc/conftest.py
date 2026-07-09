@@ -28,7 +28,7 @@ def app(fake_producer):
     settings = Settings(
         testing=True,
         ugc_database_url="sqlite+pysqlite:///./ugc_test.db",
-        kafka_bootstrap_servers=["localhost:9092"],
+        kafka_bootstrap_servers_raw="localhost:9092",
         ugc_kafka_send_max_retries=1,
         ugc_kafka_send_retry_backoff_sec=0.01,
         ugc_kafka_consumer_reconnect_backoff_sec=0.01,

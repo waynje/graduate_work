@@ -132,7 +132,7 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
     ports:
-      - "9200:9200"
+      - "9201:9200"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     healthcheck:
@@ -216,6 +216,7 @@ services:
       ELASTIC_SCHEMA: http
       PROJECT_NAME: movies
       TRACING_ENABLED: "true"
+      RECOMMENDATIONS_CACHE_TTL_SECONDS: "300"
       JAEGER_HOST: jaeger
       JAEGER_PORT: 6831
     ports:

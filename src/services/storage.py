@@ -22,6 +22,9 @@ class FilmSearchStorage(Protocol):
     async def get_by_id(self, film_id: str) -> Optional[Film]:
         ...
 
+    async def get_by_ids(self, film_ids: list[str]) -> dict[str, Film]:
+        ...
+
     async def search(
         self,
         *,
@@ -31,6 +34,18 @@ class FilmSearchStorage(Protocol):
         page_number: int,
         page_size: int,
     ) -> list[Film]:
+        ...
+
+    async def recommend(
+        self,
+        *,
+        genre_ids: list[str],
+        exclude_ids: list[str],
+        limit: int,
+    ) -> list[Film]:
+        ...
+
+    async def get_popular(self, *, exclude_ids: list[str], limit: int) -> list[Film]:
         ...
 
 
@@ -91,6 +106,60 @@ class ElasticsearchFilmStorage:
         except NotFoundError:
             return None
         return Film(**doc["_source"])
+
+    @backoff(max_retries=5)
+    async def get_by_ids(self, film_ids: list[str]) -> dict[str, Film]:
+        if not film_ids:
+            return {}
+        docs = await self.elastic.mget(index=self.index_name, ids=film_ids)
+        result: dict[str, Film] = {}
+        for doc in docs.get("docs", []):
+            if doc.get("found"):
+                film = Film(**doc["_source"])
+                result[film.id] = film
+        return result
+
+    @backoff(max_retries=5)
+    async def recommend(
+        self,
+        *,
+        genre_ids: list[str],
+        exclude_ids: list[str],
+        limit: int,
+    ) -> list[Film]:
+        filters: list[dict] = []
+        if genre_ids:
+            filters.append({"terms": {"genre_ids": genre_ids}})
+        if exclude_ids:
+            filters.append({"bool": {"must_not": [{"ids": {"values": exclude_ids}}]}})
+
+        query: dict = {"match_all": {}}
+        if filters:
+            query = {"bool": {"filter": filters}}
+
+        doc = await self.elastic.search(
+            index=self.index_name,
+            query=query,
+            sort=[{"imdb_rating": {"order": "desc", "missing": "_last"}}],
+            size=limit,
+        )
+        hits = doc.get("hits", {}).get("hits", [])
+        return [Film(**item["_source"]) for item in hits]
+
+    @backoff(max_retries=5)
+    async def get_popular(self, *, exclude_ids: list[str], limit: int) -> list[Film]:
+        query: dict = {"match_all": {}}
+        if exclude_ids:
+            query = {"bool": {"must_not": [{"ids": {"values": exclude_ids}}]}}
+
+        doc = await self.elastic.search(
+            index=self.index_name,
+            query=query,
+            sort=[{"imdb_rating": {"order": "desc", "missing": "_last"}}],
+            size=limit,
+        )
+        hits = doc.get("hits", {}).get("hits", [])
+        return [Film(**item["_source"]) for item in hits]
 
     @backoff(max_retries=5)
     async def search(
