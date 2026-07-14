@@ -24,6 +24,7 @@ class FakeStorage:
         self.films: dict[str, Film] = {}
         self.popular: list[Film] = []
         self.recommend_result: list[Film] = []
+        self.last_recommend_weights: dict[str, float] | None = None
 
     async def get_by_ids(self, movie_ids: list[str]) -> dict[str, Film]:
         return {movie_id: self.films[movie_id] for movie_id in movie_ids if movie_id in self.films}
@@ -32,9 +33,11 @@ class FakeStorage:
         self,
         *,
         genre_ids: list[str],
+        genre_weights: dict[str, float],
         exclude_ids: list[str],
         limit: int,
     ) -> list[Film]:
+        self.last_recommend_weights = genre_weights
         return self.recommend_result[:limit]
 
     async def get_popular(self, *, exclude_ids: list[str], limit: int) -> list[Film]:
@@ -43,9 +46,18 @@ class FakeStorage:
 
 
 class FakeRepository:
-    def __init__(self, signals: UserSignals, history: list[dict] | None = None) -> None:
+    def __init__(
+        self,
+        signals: UserSignals,
+        history: list[dict] | None = None,
+        signals_version: str = "v1",
+    ) -> None:
         self.signals = signals
         self.history = history or []
+        self.signals_version = signals_version
+
+    async def load_signals_version(self, user_id: str) -> str:
+        return self.signals_version
 
     async def load_user_signals(self, user_id: str) -> UserSignals:
         return self.signals
@@ -56,13 +68,24 @@ class FakeRepository:
 
 class FakeCache:
     def __init__(self) -> None:
-        self.items: dict[tuple[str, int], list[RecommendationResult]] = {}
+        self.items: dict[tuple[str, int, str], list[RecommendationResult]] = {}
 
-    async def get(self, user_id: str, limit: int) -> list[RecommendationResult] | None:
-        return self.items.get((user_id, limit))
+    async def get(
+        self,
+        user_id: str,
+        limit: int,
+        signals_version: str,
+    ) -> list[RecommendationResult] | None:
+        return self.items.get((user_id, limit, signals_version))
 
-    async def set(self, user_id: str, limit: int, items: list[RecommendationResult]) -> None:
-        self.items[(user_id, limit)] = items
+    async def set(
+        self,
+        user_id: str,
+        limit: int,
+        signals_version: str,
+        items: list[RecommendationResult],
+    ) -> None:
+        self.items[(user_id, limit, signals_version)] = items
 
 
 @pytest.mark.parametrize(
@@ -166,6 +189,7 @@ async def test_genre_based_recommendations():
     assert len(results) == 1
     assert results[0].film.id == "candidate-1"
     assert results[0].reason == "genre_match"
+    assert storage.last_recommend_weights == {"genre-action": 3.0}
 
 
 @pytest.mark.asyncio
@@ -194,7 +218,7 @@ async def test_recommendations_are_cached():
     storage.popular = [popular_film]
     cache = FakeCache()
     service = RecommendationService(
-        repository=FakeRepository(UserSignals()),
+        repository=FakeRepository(UserSignals(), signals_version="v1"),
         storage=storage,
         cache=cache,
     )
@@ -204,3 +228,20 @@ async def test_recommendations_are_cached():
     results = await service.get_recommendations("user-1", limit=5)
     assert len(results) == 1
     assert results[0].film.id == "popular-1"
+
+
+@pytest.mark.asyncio
+async def test_cache_invalidates_when_signals_version_changes():
+    storage = FakeStorage()
+    storage.popular = [Film(id="old", title="Old", imdb_rating=8.0)]
+    cache = FakeCache()
+    repo = FakeRepository(UserSignals(), signals_version="v1")
+    service = RecommendationService(repository=repo, storage=storage, cache=cache)
+
+    first = await service.get_recommendations("user-1", limit=5)
+    assert first[0].film.id == "old"
+
+    repo.signals_version = "v2"
+    storage.popular = [Film(id="new", title="New", imdb_rating=9.0)]
+    second = await service.get_recommendations("user-1", limit=5)
+    assert second[0].film.id == "new"

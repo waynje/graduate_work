@@ -40,6 +40,7 @@ class FilmSearchStorage(Protocol):
         self,
         *,
         genre_ids: list[str],
+        genre_weights: dict[str, float] | None = None,
         exclude_ids: list[str],
         limit: int,
     ) -> list[Film]:
@@ -124,23 +125,47 @@ class ElasticsearchFilmStorage:
         self,
         *,
         genre_ids: list[str],
+        genre_weights: dict[str, float] | None = None,
         exclude_ids: list[str],
         limit: int,
     ) -> list[Film]:
-        filters: list[dict] = []
-        if genre_ids:
-            filters.append({"terms": {"genre_ids": genre_ids}})
-        if exclude_ids:
-            filters.append({"bool": {"must_not": [{"ids": {"values": exclude_ids}}]}})
+        # Rank by weighted genre overlap in ES (not only imdb_rating), then re-score in Python.
+        weights = genre_weights or {genre_id: 1.0 for genre_id in genre_ids}
+        should = [
+            {"term": {"genre_ids": {"value": genre_id, "boost": float(weight)}}}
+            for genre_id, weight in weights.items()
+        ]
 
-        query: dict = {"match_all": {}}
-        if filters:
-            query = {"bool": {"filter": filters}}
+        bool_query: dict = {
+            "bool": {
+                "should": should,
+                "minimum_should_match": 1 if should else 0,
+            }
+        }
+        if exclude_ids:
+            bool_query["bool"]["must_not"] = [{"ids": {"values": exclude_ids}}]
+
+        query: dict = {
+            "function_score": {
+                "query": bool_query if should else {"match_all": {}},
+                "functions": [
+                    {
+                        "field_value_factor": {
+                            "field": "imdb_rating",
+                            "factor": 0.1,
+                            "missing": 0.0,
+                            "modifier": "none",
+                        }
+                    }
+                ],
+                "score_mode": "sum",
+                "boost_mode": "sum",
+            }
+        }
 
         doc = await self.elastic.search(
             index=self.index_name,
             query=query,
-            sort=[{"imdb_rating": {"order": "desc", "missing": "_last"}}],
             size=limit,
         )
         hits = doc.get("hits", {}).get("hits", [])

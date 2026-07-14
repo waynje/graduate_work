@@ -25,11 +25,13 @@ class ElasticsearchRecommendationStorage:
         self,
         *,
         genre_ids: list[str],
+        genre_weights: dict[str, float],
         exclude_ids: list[str],
         limit: int,
     ) -> list[Film]:
         return await self._storage.recommend(
             genre_ids=genre_ids,
+            genre_weights=genre_weights,
             exclude_ids=exclude_ids,
             limit=limit,
         )

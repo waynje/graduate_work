@@ -107,9 +107,9 @@ curl http://localhost:8020/health
    - просмотр: базовый вес + бонус за `duration_ms` + бонус за свежесть;
    - оценка 9–10: вес 3.0, 7–8: вес 2.0;
    - закладка: вес 2.5.
-4. **Content-based рекомендации** — по просмотренным фильмам строится профиль жанров, затем Elasticsearch ищет похожие фильмы с высоким `imdb_rating`, исключая уже просмотренные.
+4. **Content-based рекомендации** — по просмотренным фильмам строится профиль жанров; Elasticsearch ранжирует кандидатов по взвешенному совпадению жанров (`function_score`) и слегка бустит `imdb_rating`, затем Python доскорит по тому же профилю.
 5. **Cold start** — если истории нет, возвращаются популярные фильмы (топ по `imdb_rating`).
-6. **Кэш** — результат кэшируется в Redis (`recommendations:{user_id}:{limit}`, TTL настраивается через `RECOMMENDATIONS_CACHE_TTL_SECONDS`).
+6. **Кэш** — результат кэшируется в Redis с ключом `recommendations:{user_id}:{limit}:{signals_version}`; `signals_version` — MAX timestamps по page_view / ratings / bookmarks, поэтому после нового просмотра, оценки или закладки выдача пересчитывается ещё до истечения TTL.
 
 ### API
 
